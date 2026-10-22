@@ -934,7 +934,15 @@ export function registerTools(deps: ToolDeps): void {
               sectionGroups: [],
               availableSections: [], sectionRequested: '', sectionMatched: false,
               size: 0, sectionSpecs: '',
-              notice: `封面存在但正文读不到：${cover.ref}${cover.ext ? '（外部引用，文件可能已被移动或删除）' : ''}`,
+              notice:
+                `封面存在但正文读不到：${cover.ref}` +
+                (cover.ext
+                  // ⭐⭐⭐ 安全评审 F3：外部引用现在**还要过白名单**（`MEMJ_EXT_ROOTS`）。
+                  //     ⚠️ 措辞必须把"被安全闸拒了"与"文件没了"分开 —— 否则用户会去翻文件，
+                  //        而他真正该做的是配那个环境变量（或者把文件挪进库）。
+                  ? '（外部引用：文件可能已被移动/删除，**或者不在 `MEMJ_EXT_ROOTS` 允许的根之内**被安全闸拒绝。' +
+                    '要让这个引用可读：把它挪进库里，或把它的**所在目录**加进 `MEMJ_EXT_ROOTS`）'
+                  : ''),
             }
           }
 

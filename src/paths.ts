@@ -32,7 +32,7 @@
  */
 
 import { homedir } from 'node:os'
-import { join, resolve } from 'node:path'
+import { delimiter, isAbsolute, join, resolve } from 'node:path'
 import { fileURLToPath } from 'node:url'
 
 /**
@@ -341,14 +341,70 @@ export function resolveInsideLibrary(rel: string): string | undefined {
  * 解析封面 `ref` 指向的正文绝对路径（§3.3 / §3.6）。
  *
  * - **内部条目**：库内相对路径 ⇒ 拼到库根；
- * - **外部引用**（`ext: true`）：`ref` 是绝对路径，**原样使用**。
+ * - **外部引用**（`ext: true`）：`ref` 是绝对路径，**必须落在 `extRoots()` 之内**
+ *   （安全评审 F3：0.1.5 是"原样使用"⇒ 内容可以指挥工具去读任意文件）。
  * @param ref - 封面上的 ref。
  * @param ext - 是否为外部引用。
- * @returns 绝对路径；内部路径逃逸时返回 `undefined`。
+ * @returns 绝对路径；**内部路径逃逸、外部路径越界、非绝对路径**都返回 `undefined`。
  */
 export function resolveRef(ref: string, ext: boolean): string | undefined {
-  if (ext) return ref
-  return resolveInsideLibrary(ref)
+  if (!ext) return resolveInsideLibrary(ref)
+  const raw = ref.trim()
+  // ⚠️ `ext` 的语义是"**绝对路径**"（§3.3）—— 相对路径没有基准目录，谈不上解析。
+  if (raw === '' || !isAbsolute(raw)) return undefined
+  return extRoots().some((root) => isInsidePath(raw, root)) ? raw : undefined
+}
+
+/**
+ * ⭐⭐⭐ **外部引用允许的根**（安全评审 F3，2026-10-22）。
+ *
+ * ── 为什么需要它 ──────────────────────────────────────────────────────────────
+ * `ext: true` 的封面**把"读哪个文件"的控制权交给了内容**：`ref` 就是绝对路径，
+ * 而 `ref` 写在**库里的文档**里（可由历史会话、导入的库、外部文档写进来）。
+ * 0.1.5 的实现是**原样使用**（`if (ext) return ref`）⇒ 一条形如
+ * （yaml 里写）`ref: C:\\Users\\<你>\\.ssh\\id_rsa` + `ext: true` 的封面，
+ * 下次 `memj_read` 就把它**整篇**读进模型上下文（实测可行）。
+ *
+ * ⇒ 改成**白名单**：
+ * · 库根（`~/.dsh-memj`）永远允许（引用自己库里的文件无害）；
+ * · 其它根由 **`MEMJ_EXT_ROOTS`**（`path.delimiter` 分隔）显式授权。
+ *
+ * 🔴 **默认拒绝 = 有意的破坏性变更**：装了 0.1.5 且真在用 `ext` 引用库外文件的人，
+ *    升级后那些条目会读不到。**必须**在升级说明里写清"要设 `MEMJ_EXT_ROOTS`"——
+ *    让用户"突然读不到"而不给原因，比原来的问题更糟（见 `tools.ts` 的回执措辞）。
+ *
+ * @returns 允许的根目录（已 `resolve`，库根排在第一位）。
+ */
+export function extRoots(): string[] {
+  const raw = (process.env.MEMJ_EXT_ROOTS ?? '').trim()
+  const roots: string[] = [libraryRoot()]
+  if (raw !== '') {
+    for (const piece of raw.split(delimiter)) {
+      const one = piece.trim()
+      if (one !== '') roots.push(resolve(one))
+    }
+  }
+  return roots
+}
+
+/** 把一个路径拍成"可比较"的形状（绝对、正斜杠、去尾斜杠、小写 —— Windows 盘符大小写不敏感）。 */
+function comparablePath(p: string): string {
+  return resolve(p).replace(/\\/g, '/').replace(/\/+$/, '').toLowerCase()
+}
+
+/**
+ * `target` 是否落在 `root` 之内（含 `root` 本身）。
+ *
+ * ⚠️ **必须按路径段比较**：字符串前缀会让 `/a/bc` 被判定为在 `/a/b` 里。
+ * @param target - 待判路径。
+ * @param root - 允许的根。
+ * @returns 是否在内。
+ */
+function isInsidePath(target: string, root: string): boolean {
+  const t = comparablePath(target)
+  const r = comparablePath(root)
+  if (r === '' || t === '') return false
+  return t === r || t.startsWith(`${r}/`)
 }
 
 /**

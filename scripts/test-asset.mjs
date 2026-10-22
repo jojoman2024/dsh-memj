@@ -55,8 +55,18 @@ check('内部条目：库内相对 ref ⇒ 库根/entries', (() => {
   return d !== undefined && d.replace(/\\/g, '/').endsWith('/entries')
 })(), String(mod.assetBaseDirOf('entries/foo-12345678.md', false)))
 
-check('外部引用：绝对 ref ⇒ 它所在的目录', (() => {
+// ⚠️ **断言在 2026-10-22 改过一次**（安全评审 F3）：
+//    原来断言"任意绝对 ref ⇒ 它所在的目录"—— 那条与 `memj_read` 的任意读是**同一个洞**：
+//    封面里的 `ref` 由内容决定 ⇒ 图片接口与正文读取都能被指到库外。
+//    现在的契约：**只有落在 `MEMJ_EXT_ROOTS` 白名单内**才解析得出目录。
+check('⭐⭐ 外部引用：绝对 ref **在白名单外** ⇒ undefined（不再任意解析）',
+  mod.assetBaseDirOf('D:\\a\\b\\README.md', true) === undefined,
+  String(mod.assetBaseDirOf('D:\\a\\b\\README.md', true)))
+
+check('⭐⭐ 外部引用：**显式授权**该目录后 ⇒ 它所在的目录', (() => {
+  process.env['MEMJ_EXT_ROOTS'] = 'D:\\a\\b'
   const d = mod.assetBaseDirOf('D:\\a\\b\\README.md', true)
+  delete process.env['MEMJ_EXT_ROOTS']
   return d !== undefined && d.replace(/\\/g, '/') === 'D:/a/b'
 })(), String(mod.assetBaseDirOf('D:\\a\\b\\README.md', true)))
 

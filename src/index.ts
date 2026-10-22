@@ -516,6 +516,18 @@ export function apply(ctx: Context, config: MemjConfig = DEFAULT_CONFIG): void {
     ): Promise<void> => {
       const url = new URL(req.url ?? '/', `http://${req.headers.host ?? '127.0.0.1'}`)
       const method = (req.method ?? 'GET').toUpperCase()
+      // ⭐⭐⭐ **写通道来源闸**（安全评审 F1）——**必须排在读 body 之前**：
+      //     先收下一个 1 MB 的跨站 POST 再拒，等于把上面那条 413 限额也变成了攻击面。
+      //     ⚠️ 它只管"这个请求是不是面板自己发的"，不管"调用者是谁"（见 `http-guard.ts` 的说明）。
+      const verdict = checkWriteOrigin(method, req.headers)
+      if (!verdict.ok) {
+        res.writeHead(verdict.status ?? 403, {
+          'Content-Type': 'application/json; charset=utf-8',
+          'Cache-Control': 'no-store',
+        })
+        res.end(JSON.stringify({ ok: false, error: verdict.error ?? '拒绝写入' }))
+        return
+      }
       let rawBody = ''
       if (method !== 'GET' && method !== 'HEAD') {
         const chunks: Buffer[] = []
@@ -908,7 +920,15 @@ export type {
 //    `scripts/test-asset.mjs` 要**直接验那两个纯函数**（越界判据、扩展名白名单），
 //    不必起服务、也不必造一个真实例。⭐ 与 `handleApi` 同一理由：**测真实入口**。
 export { assetBaseDirOf, handleApi, resolveAssetPath } from './api.ts'
+// ⭐⭐⭐ **写通道来源闸**（安全评审 F1，2026-10-22）：请求头**只有路由层拿得到**
+//     （`handleApi` 的签名里没有 `req`，那是有意的 —— API 层不该知道 HTTP 细节），
+//     所以这道闸只能装在这里。
+import { checkWriteOrigin } from './http-guard.ts'
 // ⭐⭐ **封面删改通道**（决策 114）——实现只有一份（`edit.ts`），
 //    LLM 侧（`memj_promote`）与人侧（网页 API）**共用**；
 //    这里导出是为了让测试能直接验"两侧确实调的是同一套实现"。
 export * from './edit.ts'
+// ⭐⭐⭐ 安全评审（2026-10-22）：来源闸与不可信边界都要能被测试**直接验**
+//     （与 `handleApi` 同一理由：测真实入口，不测副本）。
+export * from './http-guard.ts'
+export * from './untrusted.ts'

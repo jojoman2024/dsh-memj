@@ -224,7 +224,7 @@ export interface ReadDecision {
   /** 实际返回给模型的正文（可能为空——如"只给节名清单"时）。 */
   content: string
   /** 内容形态，供工具渲染与探针断言。 */
-  mode: 'full' | 'section-list' | 'section' | 'section-miss' | 'lines'
+  mode: 'full' | 'preview' | 'section-list' | 'section' | 'section-miss' | 'lines'
   /** 文档全部节名（`section-list` / `section-miss` 时非空）。 */
   availableSections: string[]
   /**
@@ -385,17 +385,44 @@ export function decideRead(
     }
   }
 
-  // 超阈且**没有章节** ⇒ 只能给全文，但**明说"无法节选"**（§11.12 的缓解措施）。
+  // 超阈且**没有章节** ⇒ **只给阈值内的一屏**，并**明说怎么继续取**（§11.12 的缓解措施）。
+  //
+  // 🔴 **2026-10-22 修正（安全评审 F4）**：原先这里 **无条件返回全文** ⇒
+  //    `readFullMaxChars`（默认 3000）对"没有 ## / ### 的正文"**完全失效**。
+  //    实测：一份 2,097,161 字符的无节正文被**整篇**塞进模型上下文（≈ 60 万 token），
+  //    一次读取就能把整个会话的预算打穿 —— 而这个阈值存在的**唯一目的**就是防这件事。
+  //    ⚠️ 它还有一层连带影响：无节正文的**来源通常是外部文件引用**（`ext`），
+  //    于是"读一个外部大文件"= "一次烧掉几十万 token"，且**没有任何提示**。
+  // ⇒ 现在：按行累计到阈值为止，剩下的**按其本来该走的路**取
+  //    （`offset`/`limit` 按全文行号 —— 无节也能用；真要通读就显式 `full: true`）。
   if (titles.length === 0) {
+    const budget = Math.max(1, opts.maxChars)
+    let used = 0
+    let end = 0
+    for (const line of linesAll) {
+      const cost = line.length + 1 // +1 = 换行符
+      if (used + cost > budget) break
+      used += cost
+      end += 1
+    }
+    // ⚠️ 极端情况：**整篇一行**（没有换行符）⇒ 上面会切出 0 行 ⇒ 退回按字符硬截。
+    const content = end === 0
+      ? preview(body, Math.max(0, budget - 1))
+      : linesAll.slice(0, end).join('\n')
+    const what = end === 0
+      ? `前 ${content.length} 字符`
+      : `前 ${end}/${linesAll.length} 行（${content.length} 字符）`
     return {
-      content: body,
-      mode: 'full',
+      content,
+      mode: 'preview',
       availableSections: [],
       sectionGroups: [],
       sectionRequested: '',
       sectionMatched: false,
       size,
-      notice: `⚠️ 本文 ${size} 字符且没有 ## / ### 章节，**无法节选**，已返回全文。`,
+      notice:
+        `⚠️ 本文 ${size} 字符且没有 ## / ### 章节，**无法按节节选**：本次只返回${what}。` +
+        '继续读用 `offset`/`limit`（**按全文行号**）；确实要通读整篇时传 `full: true`。',
     }
   }
 

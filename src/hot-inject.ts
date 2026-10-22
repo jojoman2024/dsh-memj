@@ -18,6 +18,8 @@
  */
 
 import { loadProjectDoc, readDocReads, scanLibrary } from './store.ts'
+// ⭐⭐⭐ 安全评审 F2/F6（2026-10-22）：行内消毒 + 不可信区块边界（与 `inject.ts` 同一份）。
+import { oneLine, untrustedBlock } from './untrusted.ts'
 // ⭐⭐⭐ 提示词运行期覆盖（本次新增）：两条收尾指令走 `promptText` 取值。
 import { promptText, registerPromptDefault } from './prompts.ts'
 // ⭐⭐⭐ 评分模式（决策 177）：读侧用"有效分前 N 名"替换项目/主题层。
@@ -200,9 +202,11 @@ export interface HotPreviewItem {
  * @returns markdown 行。
  */
 export function renderMetaLine(c: Cover): string {
-  const kind = c.kind === '' ? '' : ` [${c.kind}]`
+  // 🔴 **`oneLine()` 是边界，不是修饰**（安全评审 F2）：格式**按行**表达"一条知识"，
+  //    标题/描述里一个 `\n` 就能伪造出一条完整合法的条目。
+  const kind = c.kind === '' ? '' : ` [${oneLine(c.kind)}]`
   const ext = c.ext ? '（外部引用）' : ''
-  return `- \`${c.id}\`${kind} **${c.title}**${ext} — ${c.desc}`
+  return `- \`${oneLine(c.id)}\`${kind} **${oneLine(c.title)}**${ext} — ${oneLine(c.desc)}`
 }
 
 /**
@@ -368,7 +372,10 @@ export function renderHotText(
   if (opts.supplement !== true) {
     const both = metaParts.length === 0 ? parts : [...parts, ...metaParts]
     if (both.length === 0) return { text: '', counts, preview }
-    const text = [promptText('hot:head-first', HOT_HEAD_FIRST), '', ...both, '', promptText('hot:closing', HOT_CLOSING_INSTRUCTION)].join('\n')
+    // ⭐⭐⭐ **安全评审 F6**：条目行与画像/正文都来自库 ⇒ 整段包进不可信区块。
+    //     ⚠️ 我们自己写的表头与收尾指令**留在区块外** —— 它们是"怎么对待这批数据"的说明，
+    //        不是数据本身（放进去会读成"数据在命令模型"）。
+    const text = [promptText('hot:head-first', HOT_HEAD_FIRST), '', ...untrustedBlock(both), '', promptText('hot:closing', HOT_CLOSING_INSTRUCTION)].join('\n')
     return { text, counts, preview }
   }
 
@@ -383,10 +390,10 @@ export function renderHotText(
   const head = promptText('hot:head-supplement', HOT_HEAD_SUPPLEMENT)
   const bodyText = parts.length === 0
     ? ''
-    : [head, '', ...parts, '', promptText('hot:body-closing', HOT_BODY_CLOSING_INSTRUCTION)].join('\n')
+    : [head, '', ...untrustedBlock(parts), '', promptText('hot:body-closing', HOT_BODY_CLOSING_INSTRUCTION)].join('\n')
   const metaText = metaParts.length === 0
     ? ''
-    : [head, '', ...metaParts, '', promptText('hot:closing', HOT_CLOSING_INSTRUCTION)].join('\n')
+    : [head, '', ...untrustedBlock(metaParts), '', promptText('hot:closing', HOT_CLOSING_INSTRUCTION)].join('\n')
   return { text: bodyText === '' ? metaText : bodyText, counts, preview, bodyText, metaText }
 }
 

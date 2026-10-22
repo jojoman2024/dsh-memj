@@ -176,7 +176,16 @@ check('section 未命中 ⇒ 回节名清单（不报错不回空）',
 check('full:true 逃生口 ⇒ 全文', decideRead(big, { full: true, maxChars: 3000 }).content === big)
 const noSec = 'x'.repeat(4000)
 const dNo = decideRead(noSec, { maxChars: 3000 })
-check('超阈但无章节 ⇒ 全文 + 警告', dNo.mode === 'full' && dNo.notice.includes('无法节选'))
+// ⚠️ **断言在 2026-10-22 改过一次**（安全评审 F4）：原来断言的是
+//    `mode === 'full'`（即**整篇返回**）—— 那正是缺陷本身：
+//    `readFullMaxChars` 对"没有 ## / ### 的正文"完全失效（实测 2,097,161 字符整篇进上下文）。
+//    现在的契约是：**只给阈值内的一屏**，并明确指路 `offset`/`limit` 或 `full: true`。
+check('超阈但无章节 ⇒ 只给一屏 + 指路（不再是整篇）',
+  dNo.mode === 'preview' &&
+    dNo.content.length <= 3000 &&
+    dNo.notice.includes('无法按节节选') &&
+    dNo.notice.includes('offset') &&
+    dNo.notice.includes('full: true'))
 
 // ─────────────────────────────────────────────────────────────
 console.log('\n【8】检索打分（整词命中）')

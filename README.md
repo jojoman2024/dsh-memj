@@ -759,7 +759,7 @@ JEV 不是 OpenAI 兼容协议（走 `/v1/systemone`），DSH 原生「模型」
 ```bash
 pnpm run build      # tsdown（host + client 两个条目）→ copy-web → 产物自检 → 提示词账本对账
 pnpm run typecheck  # tsc（src） + tsc（src/client）
-pnpm run test       # 57 个套件
+pnpm run test       # 62 个套件
 pnpm run check      # 上面三合一
 ```
 

@@ -647,10 +647,16 @@ export async function deleteTemplate(id: string): Promise<boolean> {
   // ⚠️ 两种格式都要删（否则旧的 .json 会让它"删了又回来"——`loadTemplate` 会回落读它）。
   for (const p of [templatePath(id), legacyTemplatePath(id)]) {
     try {
-      await rm(p, { force: true })
+      // 🔴 **不能用 `force: true`**（安全评审 F5，2026-10-22）：
+      //    `force` 把"本来就不存在"也当成功 ⇒ 本函数**对任意 id 都回 `true`** ⇒
+      //    实测 `POST /api/template/delete {id:"根本没有这个"}` 回 `200 {"ok":true}`。
+      //    ⚠️ 这不是小事：调用方（页面 / 模型）据 `ok` 判断"删掉了"，
+      //       而库里**什么都没变** —— 假成功比失败更难查（它不报错、不留痕）。
+      //    不带 `force` ⇒ 不存在时抛 ENOENT ⇒ `deleted` 保持 false ⇒ 上层回 404。
+      await rm(p)
       deleted = true
     } catch {
-      /* 不存在就算了 */
+      /* 不存在（ENOENT）或删不掉（EPERM）⇒ 都不算删成功 */
     }
   }
   return deleted

@@ -25,6 +25,8 @@ import { loadThemeFrontmatter } from './store.ts'
 import type { Cover } from './schema.ts'
 // ⭐⭐⭐ 提示词运行期覆盖（本次新增）：收尾指令 + 各段表头都走 `promptText` 取值。
 import { promptText, registerPromptDefault } from './prompts.ts'
+// ⭐⭐⭐ 安全评审 F2/F6（2026-10-22）：行内消毒 + 不可信区块边界。
+import { oneLine, untrustedBlock } from './untrusted.ts'
 
 /** 交接档位（**从小到大**，2 是默认）。 */
 export const HANDOFF_LEVELS = [1, 2, 3] as const
@@ -144,9 +146,13 @@ registerPromptDefault('inject:theme-covers-hint', THEME_COVERS_HINT)
  * @returns markdown 行。
  */
 function renderKnowledgeLine(c: Cover): string {
-  const kind = c.kind === '' ? '' : ` [${c.kind}]`
+  // 🔴 **`oneLine()` 不是修饰，是边界**（安全评审 F2）：
+  //    这个格式**按行**表达"一条知识" ⇒ 标题或描述里只要有 `\n`，
+  //    就能凭空造出**一条看起来完全合法**的条目（实测：1 条真条目渲染成 2 条，
+  //    伪造的那条 id 是 `deadbeef`）。⇒ 行内字段一律先压成单行。
+  const kind = c.kind === '' ? '' : ` [${oneLine(c.kind)}]`
   const ext = c.ext ? '（外部引用）' : ''
-  return `- \`${c.id}\`${kind} **${c.title}**${ext} — ${c.desc}`
+  return `- \`${oneLine(c.id)}\`${kind} **${oneLine(c.title)}**${ext} — ${oneLine(c.desc)}`
 }
 
 /**
@@ -185,9 +191,17 @@ export async function renderProjectHandoff(
   }
 
   // ── ① 交接文档正文（**始终给**）──
+  //
+  // ⭐⭐⭐ **安全评审 F6**：这段正文是**库里的数据**（可能由历史会话、外部文档写进来），
+  //     而它现在被逐字塞进 **node 0 系统提示词**里 ⇒ 必须先划出"这是数据"的边界，
+  //     否则文档里的一句"忽略以上指令"与用户的真指令在模型眼里同权。
   parts.push('### 交接文档')
   parts.push('')
-  parts.push(doc.narrative.trim() === '' ? '_（该项目暂无叙事内容）_' : doc.narrative.trim())
+  parts.push(
+    ...untrustedBlock([
+      doc.narrative.trim() === '' ? '_（该项目暂无叙事内容）_' : doc.narrative.trim(),
+    ]),
+  )
   parts.push('')
 
   const counts = { narrative: true, project: 0, theme: 0 }
@@ -204,7 +218,7 @@ export async function renderProjectHandoff(
     )
     parts.push('')
     if (own.length === 0) parts.push('_（本项目暂无知识条目）_')
-    else for (const { cover } of own) parts.push(renderKnowledgeLine(cover))
+    else parts.push(...untrustedBlock(own.map(({ cover }) => renderKnowledgeLine(cover))))
     parts.push('')
   }
 
@@ -231,7 +245,7 @@ export async function renderProjectHandoff(
       } else {
         parts.push(promptText('inject:theme-knowledge-hint', THEME_KNOWLEDGE_HINT))
         parts.push('')
-        for (const { cover } of extra) parts.push(renderKnowledgeLine(cover))
+        parts.push(...untrustedBlock(extra.map(({ cover }) => renderKnowledgeLine(cover))))
       }
     }
     parts.push('')
@@ -290,7 +304,7 @@ export async function renderThemeHandoff(
   )
   parts.push('')
   if (covers.length === 0) parts.push('_（该主题暂无知识条目）_')
-  else for (const { cover } of covers) parts.push(renderKnowledgeLine(cover))
+  else parts.push(...untrustedBlock(covers.map(({ cover }) => renderKnowledgeLine(cover))))
 
   // ⭐⭐ **收尾指令**（与项目交接**共用同一份**）——主题交接也没有档位分支，直接加在末尾。
   parts.push('')
